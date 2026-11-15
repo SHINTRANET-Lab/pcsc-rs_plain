@@ -1,351 +1,80 @@
-# mimizk-rs
-PC の状態を取得し、 [PC Status](https://pc-stats.eov2.com/) に送信、表示するツールです。
+# pcsc-rs_plain
 
-fork 元では対応していない Android 7 以前の ARMv6/v7 Android や ARMv6 Linux に対応しています。
+[pcsc-rs](https://github.com/SHINTRANET-Lab/pcsc-rs)（mimizk-rs）から、**TLS と自己更新を取り除いた**、最小の PC Status クライアントです。
 
-###
-![Preview - Overview](docs/images/overview.png)
-| ![Preview - Focus to DMS-Arch](docs/images/focus-dms.png) | ![Preview - Focus to ZPC-Fedora](docs/images/focus-zpc.png) |
+TLS が使えない、または重すぎる機器のための版です。サーバーとは、平文の `ws://` で話します。`wss://` が必要なサーバーへは、同じ LAN の PC で動かす中継（[pcsc-rs_relay](https://github.com/SHINTRANET-Lab/pcsc-rs_relay)）を通します。
+
+```
+この機器 ──ws://──▶ relay（PC）──wss://──▶ PC Status サーバー
+```
+
+## 向いている機器
+
+- MIPS などの、`ring`（rustls の暗号部品）が使えない機器
+- Windows XP など、現代の TLS・証明書が使えない OS
+- メモリや、ストレージの小さい機器
+
+通常の PC やスマホなら、TLS を内蔵した、本家の pcsc-rs を使ってください。
+
+## 本家との違い
+
+| | pcsc-rs | pcsc-rs_plain |
+|---|---|---|
+| 接続 | `ws://`・`wss://` | **`ws://` のみ** |
+| TLS（native-tls / rustls） | あり | **なし** |
+| 自己更新 | あり | **なし**（手で入れ替え） |
+| 取得する情報 | 同じ | 同じ |
+| PCSC_HIDE | 対応 | 対応 |
+
+`wss://` を指定すると、「TLS 機能が有効でない」というエラーで、接続できません。
+
+## 設定
+
+環境変数、または実行ディレクトリの `.env` で、設定します。
+
+| 変数 | 内容 |
 |---|---|
+| `PCSC_URI` | 接続先。`ws://relay-host:8080` のように、`ws://` で指定します |
+| `PASS` | PC Status のパスワード |
+| `PCSC_HIDE` | サーバーに送らない項目（カンマ区切り）。例：`gpu,temperature` |
+| `DEV_MODE` | 開発用の表示 |
 
-## 注意
-
-**ツールの性質上、以下の内容が他者に誰でも見られる状態で送信されるため、少しでも不快感を感じる場合は使用しないでください。**\
-個人に繋がるような情報は**ホスト名を除き**送信される事はありませんが、必要に応じて PC のホスト名を変更するか、或いは `.env` 内に以下の Key を追加してください。
-
-```env
-HOSTNAME=ホスト名として表示させたい文字列
-```
-
-## 送信、表示内容
-
-1. PC のホスト名 (e.g. `assault-e5dmts`)
-   - ホスト名に個人情報などが含まれている場合は上記[注意](#注意)を参考にホスト名を変更してください。
-   - 64 文字まで受け付けますが、32 文字目以降は ... で隠されます。\
-     マウスオーバーで全て表示されます。
-2. OS のバージョン (e.g. `Windows 10 Home(Windows_NT win32 x64 10.0.19044)` or `Windows 10 (19045)`)
-3. CPU 名、CPU 使用率 (全体, コアごと) (e.g. `AMD Ryzen 5 3500 6-Core Processor`)
-4. 物理メモリ使用量、スワップメモリ使用量
-5. マウントされているストレージ使用量 (実行されている root を参照)
-6. GPU 名、GPU 使用率、GPU メモリ使用量 (NVIDIA・AMD・Intel は複数枚対応。NVIDIA は温度も。Android は Adreno・Mali など。Windows XP / Vista / 7 は名前のみ)
-   - 使用率を読めない GPU は、使用率が「非公開」になります。
-7. 連続起動時間
-8. Load Average (Linux。Windows は CPU 使用率から作った近似値)
-9. IO wait、ディスクの使用率 (Linux。Windows は、ディスクの動いていた時間から作った近似値)
-10. センサーの温度 (CPU、NVMe など。Windows は管理者権限 (`-System` でのインストール) のときだけ取れます。Android は CPU・GPU・メモリ・バッテリーなどにまとめて表示)
-
-## 対応環境
-
-最近の Windows (Server 含む), macOS, Linux であれば動作すると思います。Windows XP などの古い Windows では、32 ビット版 (`mimizk-rs-…-i686-pc-windows-msvc.exe`) を[手動で入れて](#windows)ください。\
-もし動作しない場合は [Issues](https://github.com/SHINTRANET-Lab/pcsc-rs/issues) から報告をお願いします。
-Windows XP / Vista / 7 では、GPU は名前だけ表示され、使用率は「非公開」になります。
-
-## 使い方
-
-Windows・Linux・macOS は[コマンド1つ](#windows)で、Android は PC から adb で、NixOS などの Nix では [flake](#nix) で入れられます。
-
-### Windows
-
-PowerShell で最新のリリースを入れ、タスクスケジューラに登録して起動します（[install.ps1](install.ps1)）。以後の更新は pcsc-rs が自分で行います。
-
-```powershell
-# このユーザーだけ（%LOCALAPPDATA%\pcsc-rs。ログオンしたら起動）
-$env:PASS = "npU7pmkkYfuUdKfqzm2BtDfBPEe4pizrXyPVj8Fby3KaUtehNu3ToDtM8uEdGBr3AS9LRUkZixtZxuKTvsL2e4BVrfzWWG7RqqVThLWsVLHLaJJ8ekeGuHtLBkfZpBtv"; & ([scriptblock]::Create((irm https://raw.githubusercontent.com/SHINTRANET-Lab/pcsc-rs/main/install.ps1)))
-
-# PC 全体（%ProgramFiles%\pcsc-rs。PC の起動時に SYSTEM として起動）: 管理者の PowerShell で、上の行の最後に -System を付ける
-```
-
-- 表示する名前は `-Hostname 名前`、止めて消すときは `-Uninstall` を最後に付けます。
-- PC Status に出さない項目は `-Hide gpu_usage,temperature` のように付けます（名前は[設定](#その他の設定)の `PCSC_HIDE`）。`-Hide ""` で全部出すように戻ります。
-- もう一度実行すると、入っている `.env` の `PASS` と設定のまま最新版に入れ直します（`$env:PASS` は省略可）。
-- 確認はタスクスケジューラの「pcsc-rs」（ユーザー版は「pcsc-rs (ユーザー名)」）で。
-
-<details>
-<summary>手動で入れる場合</summary>
-
-1. [リリースページ](https://github.com/SHINTRANET-Lab/pcsc-rs/releases)から最新の `pcsc-rs-…-x86_64-pc-windows-msvc.exe` をダウンロードします。
-2. 適当なフォルダに保存し、同じフォルダに `.env` ファイルを作成して以下の Key を追加します。
-
-```env
-PASS=npU7pmkkYfuUdKfqzm2BtDfBPEe4pizrXyPVj8Fby3KaUtehNu3ToDtM8uEdGBr3AS9LRUkZixtZxuKTvsL2e4BVrfzWWG7RqqVThLWsVLHLaJJ8ekeGuHtLBkfZpBtv
-```
-
-3. ダウンロードしたファイルを実行します。
-4. [PC Status](https://pc-stats.eov2.com/)にアクセスし、自分の PC が表示されていれば完了です。
-
-必要に応じて `pcsc-rs.exe` のショートカットを `shell:startup` に追加すれば、PC と同時に起動するようになります。
-
-</details>
-
-### Linux
-
-下のコマンドで最新のリリースを入れ、systemd に登録して起動します（[install.sh](install.sh)）。以後の更新は pcsc-rs が自分で行います。
-
-```sh
-# システム全体（/usr/local/bin、systemd のサービス）
-curl -fsSL https://raw.githubusercontent.com/SHINTRANET-Lab/pcsc-rs/main/install.sh | sudo PASS=npU7pmkkYfuUdKfqzm2BtDfBPEe4pizrXyPVj8Fby3KaUtehNu3ToDtM8uEdGBr3AS9LRUkZixtZxuKTvsL2e4BVrfzWWG7RqqVThLWsVLHLaJJ8ekeGuHtLBkfZpBtv sh
-
-# このユーザーだけ（~/.local/bin、systemd --user のサービス。sudo 不要）
-curl -fsSL https://raw.githubusercontent.com/SHINTRANET-Lab/pcsc-rs/main/install.sh | PASS=npU7pmkkYfuUdKfqzm2BtDfBPEe4pizrXyPVj8Fby3KaUtehNu3ToDtM8uEdGBr3AS9LRUkZixtZxuKTvsL2e4BVrfzWWG7RqqVThLWsVLHLaJJ8ekeGuHtLBkfZpBtv sh
-```
-
-- NixOS ではシステム全体には入れられません（`/etc/systemd` が設定から作られるため）。[Nix](#nix) のモジュールを使ってください。
-- 状態は `systemctl status pcsc-rs`（ユーザー版は `systemctl --user status pcsc-rs`）、ログは `journalctl -u pcsc-rs`（ユーザー版は `journalctl --user -u pcsc-rs`）で見られます。
-- ユーザー版をログアウト中も動かすには `loginctl enable-linger` が必要です。
-- もう一度実行すると、入っているサービスの `PASS` のまま最新版に入れ直します（`PASS=` は省略可）。
-- `HOSTNAME` などの[設定](#その他の設定)は、サービスに `Environment="HOSTNAME=…"` を足してください（`sudo systemctl edit pcsc-rs`、ユーザー版は `systemctl --user edit pcsc-rs`）。
-- PC Status に出さない項目は、`PASS=` の後ろに `PCSC_HIDE=gpu_usage,temperature` を足して実行すれば入ります（名前は[設定](#その他の設定)の `PCSC_HIDE`）。`PCSC_HIDE=` を付けて実行すると全部出すように戻り、付けなければ前の設定のままです。
-
-<details>
-<summary>手動で入れる場合</summary>
-
-`sudo install -D --no-target-directory pcsc-rs-* /usr/local/bin/pcsc-rs` を実行し、Systemd に登録します。\
-`sudo --preserve-env=EDITOR systemctl edit --force --full pcsc-rs.service`
+`.env` の例：
 
 ```
-[Unit]
-Description=PCStatus Client
-Wants=network-online.target
-After=network-online.target
-
-[Service]
-Environment="PASS=npU7pmkkYfuUdKfqzm2BtDfBPEe4pizrXyPVj8Fby3KaUtehNu3ToDtM8uEdGBr3AS9LRUkZixtZxuKTvsL2e4BVrfzWWG7RqqVThLWsVLHLaJJ8ekeGuHtLBkfZpBtv"
-Environment="PCSC_UPDATED=terminate"
-ExecStart=/usr/local/bin/pcsc-rs
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
+PCSC_URI=ws://192.168.1.10:8080
+PASS=secret
+PCSC_HIDE=gpu_usage
 ```
 
-```sh
-sudo systemctl enable --now pcsc-rs
+使用率が読めない GPU は、`gpu_usage` が自動で非公開になります（本家と同じ動きです）。
+
+## ビルド
+
+```
+cargo build --release
 ```
 
-</details>
+Windows XP 向け：
 
-#### Raspberry Pi Zero / Zero 2
-
-Raspberry Pi Zero系は、OSのビット数に応じて次のリリースバイナリを使用します。
-
-| 端末・OS | `uname -m` | Rust target |
-|---|---|---|
-| Pi Zero / Zero W（32-bit OS） | `armv6l` | `arm-unknown-linux-musleabi` |
-| Pi Zero 2 W（32-bit OS） | `armv7l` | `armv7-unknown-linux-musleabi` |
-| Pi Zero 2 W（64-bit OS） | `aarch64` | `aarch64-unknown-linux-musl` |
-
-Raspberry Pi OSでは、Pi Zeroは32-bit OSを使用してください。Pi Zero 2 Wは32-bitと
-64-bitのどちらでも動作します。Pi Zero向けARMバイナリは静的リンクされているため、
-追加のRustやOpenSSLライブラリは不要です。
-
-Linux用インストーラーは`uname -m`を自動判定します。
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/SHINTRANET-Lab/pcsc-rs/main/install.sh |
-  PASS=<PASS> sh
+```
+cargo build --release --target i686-pc-windows-msvc --no-default-features --features xp
 ```
 
+MIPS など（Tier 3 のターゲット）は、nightly の `-Zbuild-std` が要ります。
 
-手元でビルドする場合は、Windowsでは
-`.\scripts\build-android-local.ps1 arm32`、WSL/Linuxでは
-`scripts/build-android-local.sh arm32`を実行し、Pi Zeroは
-`target/arm-unknown-linux-musleabi/release/pcsc-rs`、Pi Zero 2は
-`target/armv7-unknown-linux-musleabi/release/pcsc-rs`を使用します。
-
-### macOS
-
-Linux と同じコマンドで最新のリリースを入れ、launchd に登録して起動します。ログイン時に起動し、終了したら（更新のあとも）起動し直します。
-
-```sh
-# このユーザーだけ（~/.local/bin、~/Library/LaunchAgents。sudo 不要）
-curl -fsSL https://raw.githubusercontent.com/SHINTRANET-Lab/pcsc-rs/main/install.sh | PASS=npU7pmkkYfuUdKfqzm2BtDfBPEe4pizrXyPVj8Fby3KaUtehNu3ToDtM8uEdGBr3AS9LRUkZixtZxuKTvsL2e4BVrfzWWG7RqqVThLWsVLHLaJJ8ekeGuHtLBkfZpBtv sh
-
-# Mac 全体（/usr/local/bin、/Library/LaunchDaemons。ログインしていなくても動く）
-curl -fsSL https://raw.githubusercontent.com/SHINTRANET-Lab/pcsc-rs/main/install.sh | sudo PASS=npU7pmkkYfuUdKfqzm2BtDfBPEe4pizrXyPVj8Fby3KaUtehNu3ToDtM8uEdGBr3AS9LRUkZixtZxuKTvsL2e4BVrfzWWG7RqqVThLWsVLHLaJJ8ekeGuHtLBkfZpBtv sh
+```
+cargo +nightly build --release -Zbuild-std=std,panic_abort --target mipsel-unknown-linux-musl
 ```
 
-- 状態は `launchctl print gui/$(id -u)/io.github.zel9278.pcsc-rs`（Mac 全体なら `sudo launchctl print system/io.github.zel9278.pcsc-rs`）、ログは `~/Library/Logs/pcsc-rs.log`（Mac 全体なら `/var/log/pcsc-rs.log`）。
-- もう一度実行すると、入っている設定の `PASS` と `HOSTNAME`・`DEV_MODE`・`PCSC_URI`・`PCSC_HIDE` のまま最新版に入れ直します。
-- PC Status に出さない項目は、`PASS=` の後ろに `PCSC_HIDE=gpu_usage,temperature` を足して実行します（名前は[設定](#その他の設定)の `PCSC_HIDE`）。`PCSC_HIDE=` で全部出すように戻ります。
-- `HOSTNAME` などを足すときは、plist に書いてからもう一度実行します。
+## 取得できる情報
 
-  ```sh
-  plutil -insert EnvironmentVariables.HOSTNAME -string "表示したい名前" ~/Library/LaunchAgents/io.github.zel9278.pcsc-rs.plist
-  curl -fsSL https://raw.githubusercontent.com/SHINTRANET-Lab/pcsc-rs/main/install.sh | sh
-  ```
+CPU、メモリ、ストレージ、GPU、温度、バッテリー、稼働時間、ロードアベレージ、I/O 待ち。機器によって、取れる項目は変わります。詳しくは、本家の README を参照してください。
 
-- 止めて消すとき: `launchctl bootout gui/$(id -u)/io.github.zel9278.pcsc-rs` のあと、plist と `~/.local/bin/pcsc-rs` を消します。
-- ブラウザでダウンロードした実行ファイルを直接使うときは、`chmod +x` と `xattr -d com.apple.quarantine <ファイル名>` が必要です（上のコマンドでは不要）。
+## ライブラリとして
 
-### Android（試験的）
+`pcsc_rs::Monitor` は、システムの情報を、1 秒ごとに集めます。表示だけに使うこともできます。
 
-#### アプリ（ワイヤレスデバッグ・Shizuku・root）
+## 由来
 
-[Releases](https://github.com/SHINTRANET-Lab/pcsc-rs/releases/latest) の `mimizk-rs-<バージョン>-android.apk`（arm64）を入れて開き、動かし方を選んで、PASS を入れて「開始」を押します。動かし方は次の3つから選べます。
-
-| 動かし方 | 要るもの | 向いている場合 |
-|---|---|---|
-| ワイヤレスデバッグ | Android 11 以降・Wi-Fi。最初に一度だけペアリングする（コードは通知に入力） | root も Shizuku も無い |
-| Shizuku | [Shizuku](https://shizuku.rikka.app/) が動いていること | もう Shizuku を使っている。一度起動すれば、再起動まで Wi-Fi なしで操作できる |
-| root | root 化した端末（クライアントは adb と同じ shell ユーザーの権限に下げて動かす） | 再起動後の自動開始を確実にしたい |
-
-- 動かし方は下の adb 版と同じで、`/data/local/tmp/pcsc-rs` に置いて端末から切り離して動かします。アプリを閉じても動き続けます。root や、root で起動した Shizuku から動かしても、クライアントとそのファイルは shell ユーザーのものになるので、あとで別の動かし方に切り替えられます
-- ワイヤレスデバッグと Shizuku のときは、開発者向けオプションの USB デバッグをオンにしておいてください。オフだと、ワイヤレスデバッグがオフになったとき（Wi-Fi が切れたときも）に adbd と一緒にクライアントも止まります
-- adb 版で入れていたときは、PASS と名前をそのまま読み込みます
-- 「PC Status に出さない項目」で選んだ項目は送りません（[設定](#その他の設定)の `PCSC_HIDE` と同じ）。変えたら「再起動」で反映されます
-- ワイヤレスデバッグは、ペアリングしたあとはアプリが自分でオンにできます（ネットワークごとに初回だけ「このネットワークで常に許可」が要ります）
-- 「スマホの再起動後に自動で開始」: root はそのまま、ワイヤレスデバッグは許可済みの Wi-Fi につながっていれば、Shizuku は Shizuku も起動時に動く（Sui や root）ときだけ効きます
-
-自分でビルドするときは [android/README.md](android/README.md) を見てください。
-#### PC から adb で
-
-root なしで、PC から adb で入れます（[scripts/android-adb.sh](scripts/android-adb.sh)）。adb shell の権限で動くので、CPU（コアごと）・GPU（Adreno）・ロードアベレージも取れます。古い Android で CPU/GPU の sysfs 名が取得できない場合も、SoC 名や `/proc/cpuinfo` から `Krait`、`Cortex-A53`、`Adreno 330` などを補完します。
-
-```sh
-# USB か、無線デバッグ（adb pair / adb connect）でつないでから
-PASS=<PASS> scripts/android-adb.sh install --hostname 表示したい名前
-scripts/android-adb.sh status   # 動いているか
-scripts/android-adb.sh log      # ログ
-scripts/android-adb.sh stop     # 止める
-scripts/android-adb.sh devices  # つながっている端末とシリアル
-# PC Status に出さない項目（設定の PCSC_HIDE）。PowerShell 版は -Hide gpu_usage,temperature
-PCSC_HIDE=gpu_usage,temperature scripts/android-adb.sh install
-```
-
-Windows の PC からは PowerShell 版（[scripts/android-adb.ps1](scripts/android-adb.ps1)）を使います。
-
-```powershell
-$env:PASS = "<PASS>"; .\scripts\android-adb.ps1 install -Hostname 表示したい名前
-# status / log / stop も同じ形で（install の代わりに書く）
-```
-
-ローカルでビルドしたバイナリを使う場合は、リポジトリ内で実行してください。
-`install`は端末のABIに応じて`target`以下のreleaseバイナリを自動選択します。
-別のファイルを使う場合は`-Binary`で指定します。
-
-```powershell
-$env:PASS = "<PASS>"; .\scripts\android-adb.ps1 install -Hostname 表示したい名前
-.\scripts\android-adb.ps1 install -Binary .\target\armv7-unknown-linux-musleabi\release\pcsc-rs
-# 32bit ARM の Android 5.0 以降で、Android 標準の DNS リゾルバを使う版を入れる
-.\scripts\android-adb.ps1 install -Libc bionic
-```
-
-- 端末から切り離して動くので、ケーブルを抜いても、画面を消して省電力（Doze）に入っても止まりません。落ちたときは 5 秒後に起動し直します
-- 端末を再起動すると止まるので、もう一度 `install` してください（2回目からは `PASS` と名前を引き継ぎます）
-- 名前を指定しないと機種名（例: `SH-M28`）になります
-- adb が PATH に無いときは、`--adb /path/to/adb`（PowerShell 版は `-Adb C:\path\to\adb.exe`）か、環境変数 `ADB` で場所を指定します
-- 端末が何台もつながっているときは、`--serial <シリアル>`（PowerShell 版は `-Serial`）か `ANDROID_SERIAL` で選びます。シリアルは `devices` で一覧が出ます（無線デバッグなら `IP:ポート`）
-- Android NDKはPATHか、環境変数`ANDROID_NDK_ROOT`で指定します
-- 端末のABIに応じて、64bit Android 5.0〜6.xは`aarch64-linux-android`、ARMv7は
-  `armv7-unknown-linux-musleabi`、ARMv6は`arm-unknown-linux-musleabi`を自動で選びます。
-  PowerShell版は`-Libc bionic`を付けると、ARMv7でも`armv7-linux-androideabi`を選びます。
-  `-Libc musl`はmusl版を明示し、`-Libc auto`（既定）は従来どおりの自動選択です。
-- ARMv7でAndroid 5.0以降の端末では、`-Libc bionic`で入れる`armv7-linux-androideabi`版をおすすめします。
-  musl版は`/etc/resolv.conf`でDNSサーバーを探しますが、Androidにはこのファイルが無いため、
-  端末によっては`failed to lookup address information`で名前解決に失敗します。
-  bionic版はAndroidのDNSリゾルバを使うので、この問題が起きません。Android 4.4以前では動きません。
-- `mimizk-rs-<バージョン>-armv7-linux-androideabi`は[Releases](https://github.com/SHINTRANET-Lab/pcsc-rs/releases/latest)に
-  添付されます。ダウンロードして`-Binary`で指定すると使えます。musl版と同じく自動更新は行いません。
-- musl版Androidクライアントは自動更新を行えない場合があります(`/etc/resolv.conf`が無い場合など)。
-- GitHub Actionsを使わずローカルでビルドする場合は、WSLで
-  `scripts/build-android-local.sh android64`を実行できます。ARMv6/ARMv7向けは
-  `scripts/build-android-local.sh arm32`を使い、`cross`とDockerが必要です。
-  両方のAPKまで作る場合は`./scripts/build-android-local.sh apk`を実行します。
-- WindowsホストからはPowerShell版の
-  `.\scripts\build-android-local.ps1 android64`を使えます。ARMv6/ARMv7向けは
-  `.\scripts\build-android-local.ps1 arm32`、両方のAPKまで作る場合は
-  `.\scripts\build-android-local.ps1 apk`を実行します。PowerShell版のARM32/APKビルドには
-  WSL（Rustと`cross`を導入済み）およびDocker DesktopのWSL統合が必要です。
-  既定のディストリビューションは`ubuntu`です。別のディストリビューションを使う場合は
-  `-WslDistribution Ubuntu`のように指定してください。ビルドはDocker内のARM用GCCが
-  並列時に不安定な古い環境にも対応するため、既定で1ジョブずつ実行します。
-  ARMv7のbionic版は、NDKだけで作れます（WSLとDockerは要りません）。
-  `.\scripts\build-android-local.ps1 armv7`を実行します。
-
-####
-### Nix
-
-[flake](flake.nix) でパッケージと、NixOS・nix-darwin・home-manager 用のモジュール（`services.pcsc-rs`）を配っています。Nix で入れた pcsc-rs は自分では更新せず、`nix flake update` などで更新します。
-
-```nix
-# flake.nix
-{
-  inputs.pcsc-rs.url = "github:SHINTRANET-Lab/pcsc-rs";
-}
-```
-
-`inputs.pcsc-rs.inputs.nixpkgs.follows = "nixpkgs"` は付けないでください。pcsc-rs のビルドには Rust 1.98 以降が要り、安定版の nixpkgs（NixOS 26.05 は 1.95）ではビルドできません。
-
-```nix
-# NixOS（systemd のサービス）: nixosConfigurations.<host>.modules に pcsc-rs.nixosModules.default
-# nix-darwin（LaunchDaemon）: darwinConfigurations.<host>.modules に pcsc-rs.darwinModules.default
-# home-manager（Linux は systemd --user、macOS は LaunchAgent）: pcsc-rs.homeManagerModules.default
-{
-  services.pcsc-rs = {
-    enable = true;
-    # PASS=<パスワード> の1行を書いたファイル。sops-nix や agenix の出力など
-    passFile = "/run/secrets/pcsc-rs.env";
-    # または pass = "…";（Nix ストアに入り、誰でも読めます）
-    # hostname = "表示したい名前";
-    # devMode = true;
-    # uri = "wss://pcss.eov2.com/server";
-    # hide = [ "gpu_usage" "temperature" ];  # PC Status に出さない項目（その他の設定の PCSC_HIDE）
-  };
-}
-```
-
-モジュールを使わずに試すだけなら `PASS=… nix run github:SHINTRANET-Lab/pcsc-rs` で動きます。
-
-## その他の設定
-
-- `PCSC_UPDATED`
-
-  更新処理後の動作の設定。新しいリリースの確認は起動時と、起動中は6時間ごとに行います。
-
-  | 値          | 説明                      |
-  | ----------- | ------------------------- |
-  | `none`      | なにもしない (デフォルト) |
-  | `terminate` | 終了する                  |
-  | `restart`   | 再起動する                |
-
-- `PCSC_URI`
-
-  接続先のサーバー (デフォルト: `wss://pcss.eov2.com/server`)\
-  v2 から WebSocket で接続します。v1 と同じ `https://pcss.eov2.com` のような形でも、`wss://…/server` に読み替えて接続します。
-
-- `DEV_MODE`
-
-  `true` にすると同じホスト名で複数台つなげられます。PC Status には `[DEV] ホスト名_番号` と表示されます。
-
-- `HOSTNAME`
-
-  PC Status に表示するホスト名 (デフォルト: PC のホスト名)
-- `PCSC_HIDE`
-
-  PC Status に出さない項目 (デフォルト: なし)。名前をカンマか空白で区切って書きます (大文字小文字は区別しません)。\
-  隠した項目は送らず、PC Status には「非公開」と表示されます。
-
-  | 名前 | 隠すもの |
-  | --- | --- |
-  | `os` | OS の名前とバージョン |
-  | `cpu` | コアごとの CPU 使用率 |
-  | `cpu_name` | CPU 名とコアの種類 |
-  | `cpu_frequency` | コアの最高周波数 |
-  | `memory` | メモリとスワップ |
-  | `storage` | ストレージ |
-  | `gpu` | GPU すべて (下の 4 つをまとめて) |
-  | `gpu_name` | GPU 名 |
-  | `gpu_usage` | GPU 使用率 |
-  | `gpu_memory` | GPU メモリ |
-  | `temperature` | 温度センサー (GPU のものも) |
-  | `battery` | バッテリー |
-  | `uptime` | 連続起動時間 |
-  | `loadavg` | Load Average |
-  | `iowait` | IO wait |
-
-```env
-  PCSC_HIDE=gpu_usage,temperature
-```
-
-  GPU 使用率を読めない GPU (MediaTek / Mali の多くや Raspberry Pi、BMC の VGA、Windows XP / Vista / 7 など) だけの PC では、`PCSC_HIDE` を指定しなくても、GPU 使用率は自動で「非公開」になります (0% とは送りません)。
+[Zel9278/pcsc-rs](https://github.com/Zel9278/pcsc-rs) を元にした、[SHINTRANET-Lab/pcsc-rs](https://github.com/SHINTRANET-Lab/pcsc-rs) の派生版です。
