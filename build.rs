@@ -1,5 +1,5 @@
-use git2::{DescribeFormatOptions, DescribeOptions, Error, Repository};
 use std::io;
+use std::process::Command;
 #[cfg(windows)]
 use winres::WindowsResource;
 
@@ -32,19 +32,18 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 
-fn get_git_describe_result() -> Result<String, Error> {
-    let repo = Repository::open(".")?;
-    let describe = repo.describe(
-        DescribeOptions::new()
-            .describe_tags()
-            .show_commit_oid_as_fallback(true),
-    )?;
-    let formatted = describe.format(Some(
-        DescribeFormatOptions::new()
-            .always_use_long_format(true)
-            .dirty_suffix("-dirty"),
-    ))?;
-    Ok(formatted)
+fn get_git_describe_result() -> Result<String, String> {
+    let output = Command::new("git")
+        .args(["describe", "--tags", "--always", "--long", "--dirty=-dirty"])
+        .output()
+        .map_err(|e| format!("failed to run git describe: {e}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("git describe failed: {}", stderr.trim()));
+    }
+    String::from_utf8(output.stdout)
+        .map(|result| result.trim().to_owned())
+        .map_err(|e| format!("git describe returned invalid UTF-8: {e}"))
 }
 fn arch_label(target: &str) -> &'static str {
     match target {

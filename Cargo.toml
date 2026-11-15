@@ -27,9 +27,6 @@ sysinfo = { version = "=0.39.6", default-features = false, features = ["componen
 default = ["client"]
 client = ["dep:tungstenite"]
 
-[build-dependencies]
-git2 = { version = "=0.21.0", default-features = false }
-
 [target.'cfg(windows)'.build-dependencies]
 winres = "=0.1.12"
 
