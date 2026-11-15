@@ -1,6 +1,6 @@
 [package]
 name = "pcsc-rs-plain"
-version = "0.23.2"
+version = "1.0.0"
 edition = "2024"
 rust-version = "1.98"
 
