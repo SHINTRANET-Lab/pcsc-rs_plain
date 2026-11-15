@@ -15,6 +15,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      issues: write
     runs-on: ubuntu-latest
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
@@ -74,7 +75,7 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
-    uses: ./.github/workflows/build.yml
+    uses: .\.github\workflows\build.yml
     with:
       tag-name: ${{ needs.release-please.outputs.tag_name }}
 
