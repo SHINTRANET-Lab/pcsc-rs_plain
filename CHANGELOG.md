@@ -1,7 +1,7 @@
 # Changelog
 
 ## [1.0.0](https://github.com/SHINTRANET-Lab/pcsc-rs_plain/compare/v0.24.0...v1.0.0) (2026-11-15)
-
+w
 
 ### ⚠ BREAKING CHANGES
 
