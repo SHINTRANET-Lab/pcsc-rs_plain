@@ -1,5 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-// Without the client, the parts only it uses (TLS setup, PCSC_HIDE parsing, logging) are idle
+// Without the client, the parts only it uses (PCSC_HIDE parsing, logging) are idle
 #![cfg_attr(not(feature = "client"), allow(dead_code, unused_macros))]
 
 /// println! that never panics: a hung-up terminal (EIO), a closed pipe (EPIPE) or a full
@@ -43,8 +43,6 @@ mod loadavg;
 mod monitor;
 mod status;
 mod thermal;
-#[cfg(feature = "client")]
-mod update;
 
 #[cfg(feature = "client")]
 pub use config::Config;
@@ -69,15 +67,6 @@ impl Monitor {
     }
 }
 
-// Rustls replaces native-tls for both targets that cannot use the system OpenSSL.
-#[cfg(all(
-    feature = "native-tls",
-    any(feature = "xp", feature = "android-legacy")
-))]
-compile_error!(
-    "xp and android-legacy replace native-tls: build with --no-default-features and one target feature"
-);
-
 /// `--as-shell-user COMMAND...` (Android): runs COMMAND as the shell user; see
 /// [`android::exec_as_shell_user`].
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -85,20 +74,10 @@ pub fn exec_as_shell_user(command: impl Iterator<Item = std::ffi::OsString>) -> 
     android::exec_as_shell_user(command)
 }
 
-/// Checks for an update, starts the system monitor, keeps a connection to the
-/// PC Status server, and never returns.
+/// Starts the system monitor, keeps a connection to the PC Status server over plain
+/// `ws://` (point it at a relay for `wss://`), and never returns.
 #[cfg(feature = "client")]
 pub fn start(config: &Config) -> ! {
-    // Before the updater starts, whose HTTP client starts threads.
-    #[cfg(all(
-        any(target_os = "linux", target_os = "android"),
-        feature = "native-tls"
-    ))]
-    android::prepare_tls();
-
-    update::check(config.on_update);
-    update::spawn_periodic(config.on_update);
-
     let hostname = config.hostname.clone();
     #[cfg(any(target_os = "linux", target_os = "android"))]
     let hostname = hostname.filter(|h| !android::is_shell_hostname(h));

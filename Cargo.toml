@@ -1,10 +1,8 @@
 [package]
-name = "mimizk-rs"
-version = "0.24.0"
+name = "pcsc-rs-plain"
+version = "0.23.2"
 edition = "2024"
 rust-version = "1.98"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
 name = "pcsc_rs"
@@ -19,61 +17,18 @@ required-features = ["client"]
 arc-swap = "=1.9.2"
 cfg-if = "=1.0.5"
 dotenvy = "=0.15.7"
-# Android old-device and XP builds use ring rather than aws-lc-rs.
-rustls = { version = "0.23.46", optional = true, default-features = false, features = ["ring", "std", "tls12"] }
-# The TLS handshake is done in client.rs (with a timeout) instead of inside tungstenite
-native_tls_crate = { package = "native-tls", version = "=0.2.18", optional = true }
-# Releases are bare binaries; the HTTP client and TLS come from the native-tls or xp feature.
-self_update = { version = "=1.3.0", optional = true, default-features = false, features = ["github"] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.151"
+# No TLS feature on purpose: this client only speaks ws:// (to a relay on the LAN)
 tungstenite = { version = "=0.30.0", features = ["url"], optional = true }
 sysinfo = { version = "=0.39.6", default-features = false, features = ["component", "disk", "multithread", "system"] }
-webpki-roots = { version = "1.0.10", optional = true }
 
 [features]
-default = ["native-tls"]
-# The client itself: the connection to PC Status and the self-update. Without it the crate
-# is only the system monitor (pcsc_rs::Monitor), for programs that show the status locally.
-client = ["dep:tungstenite", "dep:self_update"]
-# TLS goes through native-tls for both the WebSocket and the updater
-native-tls = [
-    "client",
-    "dep:native_tls_crate",
-    "dep:self_update",
-    "tungstenite/native-tls",
-    "self_update/reqwest",
-    "self_update/native-tls",
-    "dep:openssl",
-]
-# Windows XP build (`--target i686-pc-windows-msvc --no-default-features --features xp`).
-# XP has no usable TLS stack and outdated roots, so TLS is rustls with ring and the
-# bundled Mozilla roots, and the updater uses ureq, since reqwest's rustls needs
-# aws-lc-rs and the system roots. VC-LTL5 and YY-Thunks are linked through
-# thunk-rs, which needs curl and 7z unless VC_LTL and YY_THUNKS point at them.
-xp = [
-    "client",
-    "dep:rustls",
-    "dep:self_update",
-    "dep:thunk-rs",
-    "dep:webpki-roots",
-    "tungstenite/__rustls-tls",
-    "self_update/ureq",
-    "self_update/rustls",
-]
-# Gingerbread APK: a static musl client avoids the Android NDK API 19 baseline.
-android-legacy = [
-    "client",
-    "dep:rustls",
-    "dep:webpki-roots",
-    "tungstenite/__rustls-tls",
-    "self_update/ureq",
-    "self_update/rustls",
-]
+default = ["client"]
+client = ["dep:tungstenite"]
 
 [build-dependencies]
 git2 = { version = "=0.21.0", default-features = false }
-thunk-rs = { version = "=0.3.5", optional = true, features = ["subsystem_windows"] }
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "=0.1.12"
@@ -95,9 +50,6 @@ windows-sys = { version = "=0.61.2", features = [
 [target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
 libc = "=0.2.190"
 
-[target.'cfg(not(any(target_os = "windows", target_os = "macos", target_os = "ios")))'.dependencies]
-openssl = { version = "=0.10.81", optional = true, features = ["vendored"] }
-
 [lints.clippy]
 pedantic = "warn"
 
@@ -105,3 +57,4 @@ pedantic = "warn"
 strip = "symbols"
 lto = "fat"
 codegen-units = 1
+opt-level = "s"

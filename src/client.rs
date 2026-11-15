@@ -1,5 +1,6 @@
-//! The WebSocket connection to the PC Status server (`/server`). Messages are
-//! JSON `{"type", "data"}` objects, as in pc-status-monorepo-rs.
+//! The WebSocket connection to the PC Status server (`/server`), over plain `ws://`: this
+//! build has no TLS, so point it at a relay (pcsc-rs_relay) that speaks `wss://` upstream.
+//! Messages are JSON `{"type", "data"}` objects, as in pc-status-monorepo-rs.
 //!
 //! The server says `Hi` when we connect; we answer `Hi` with the status and the
 //! password. After that it sends `Sync` every second and we answer `Sync` with
@@ -28,8 +29,8 @@ const RETRY_MIN: Duration = Duration::from_secs(5);
 const RETRY_MAX: Duration = Duration::from_secs(60);
 /// The server sends `Sync` every second; this much silence means the connection is gone.
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
-/// For each address, the TLS handshake and the HTTP upgrade. A blocking socket has no
-/// timeout of its own: a path that dies mid-handshake would block the reconnect forever.
+/// For each address, the HTTP upgrade. A blocking socket has no timeout of its own: a path
+/// that dies mid-handshake would block the reconnect forever.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Serialize, Debug)]
@@ -179,14 +180,15 @@ fn timed_out(what: &str) -> Error {
     ))
 }
 
-/// `tungstenite::connect`, with timeouts on every step.
+/// `tungstenite::connect` for `ws://` only, with timeouts on every step.
 fn connect(uri: &str) -> tungstenite::Result<Socket> {
     let request = uri.into_client_request()?;
-    let tls = match request.uri().scheme_str() {
-        Some("wss") => true,
-        Some("ws") => false,
+    match request.uri().scheme_str() {
+        Some("ws") => {}
+        // This build has no TLS: use a relay (ws://) that speaks wss:// to the server
+        Some("wss") => return Err(Error::Url(UrlError::TlsFeatureNotEnabled)),
         _ => return Err(Error::Url(UrlError::UnsupportedUrlScheme)),
-    };
+    }
     let host = request
         .uri()
         .host()
@@ -195,10 +197,7 @@ fn connect(uri: &str) -> tungstenite::Result<Socket> {
         .trim_start_matches('[')
         .trim_end_matches(']')
         .to_owned();
-    let port = request
-        .uri()
-        .port_u16()
-        .unwrap_or(if tls { 443 } else { 80 });
+    let port = request.uri().port_u16().unwrap_or(80);
 
     #[cfg_attr(
         not(any(
@@ -236,41 +235,7 @@ fn connect(uri: &str) -> tungstenite::Result<Socket> {
     stream.set_read_timeout(Some(CONNECT_TIMEOUT))?;
     stream.set_write_timeout(Some(CONNECT_TIMEOUT))?;
 
-    // native-tls: tungstenite's own handshake panics when the socket times out, so do it here
-    #[cfg(feature = "native-tls")]
-    let handshake = {
-        use native_tls_crate::{HandshakeError as TlsError, TlsConnector};
-        let stream = if tls {
-            let connector = TlsConnector::new().map_err(|e| Error::Tls(e.into()))?;
-            match connector.connect(&host, stream) {
-                Ok(stream) => MaybeTlsStream::NativeTls(stream),
-                Err(TlsError::Failure(e)) => return Err(Error::Tls(e.into())),
-                // A blocking socket only "would block" when its timeout ran out
-                Err(TlsError::WouldBlock(_)) => return Err(timed_out("TLS handshake")),
-            }
-        } else {
-            MaybeTlsStream::Plain(stream)
-        };
-        tungstenite::client(request, stream)
-    };
-    // Rustls targets: the TLS handshake happens during the upgrade, under the same timeouts.
-    #[cfg(not(feature = "native-tls"))]
-    #[cfg(not(feature = "native-tls"))]
-    let handshake = {
-        use std::sync::Arc;
-        use tungstenite::Connector;
-        let connector = tls.then(|| {
-            let roots = rustls::RootCertStore {
-                roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
-            };
-            let config = rustls::ClientConfig::builder()
-                .with_root_certificates(roots)
-                .with_no_client_auth();
-            Connector::Rustls(Arc::new(config))
-        });
-        tungstenite::client_tls_with_config(request, stream, None, connector)
-    };
-    match handshake {
+    match tungstenite::client(request, MaybeTlsStream::Plain(stream)) {
         Ok((socket, _)) => Ok(socket),
         Err(HandshakeError::Failure(e)) => Err(e),
         Err(HandshakeError::Interrupted(_)) => Err(timed_out("WebSocket handshake")),
@@ -278,13 +243,8 @@ fn connect(uri: &str) -> tungstenite::Result<Socket> {
 }
 
 fn set_read_timeout(socket: &Socket) -> std::io::Result<()> {
-    let stream = match socket.get_ref() {
-        MaybeTlsStream::Plain(stream) => stream,
-        #[cfg(feature = "native-tls")]
-        MaybeTlsStream::NativeTls(stream) => stream.get_ref(),
-        #[cfg(any(feature = "xp", feature = "android-legacy"))]
-        MaybeTlsStream::Rustls(stream) => stream.get_ref(),
-        _ => return Ok(()),
+    let MaybeTlsStream::Plain(stream) = socket.get_ref() else {
+        return Ok(());
     };
     stream.set_read_timeout(Some(READ_TIMEOUT))
 }
