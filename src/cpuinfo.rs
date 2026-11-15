@@ -46,7 +46,7 @@ fn parse_cpuinfo(text: &str) -> Vec<CoreInfo> {
                 ..CoreInfo::default()
             }),
             // After the cores on ARM: applies to the whole machine
-            "Hardware" => hardware = Some(value.to_owned()),
+            "Hardware" | "system type" => hardware = Some(value.to_owned()),
             _ => {
                 // Single-core kernels print no `processor` line at all
                 if cores.is_empty() && matches!(key, "CPU implementer" | "CPU part") {
@@ -226,6 +226,21 @@ fn parse_range_count(text: &str) -> Option<usize> {
         total += b.checked_sub(a)? + 1;
     }
     Some(total)
+}
+
+fn mips_description(cores: &[CoreInfo]) -> Option<String> {
+    if cores.is_empty() || cores.iter().any(|c| c.implementer.is_some()) {
+        return None;
+    }
+    let name = cores.first()?.name.as_deref()?;
+    let soc = cores.first()?.hardware.as_deref()?;
+    let soc = soc.split(" ver:").next()?.trim();
+    let core = if cores.len() == 1 {
+        name.to_owned()
+    } else {
+        format!("{}×{name}", cores.len())
+    };
+    Some(format!("{core} ({soc})"))
 }
 
 /// Joins the SoC name and the core layout, avoiding the same words twice.
@@ -420,7 +435,8 @@ fn compute(brand: &str, hint: Option<&str>) -> String {
             l
         }
     });
-    compose(soc_name(&cores).as_deref(), layout.as_deref())
+    let mips = layout.is_none().then(|| mips_description(&cores)).flatten();
+    mips.or_else(|| compose(soc_name(&cores).as_deref(), layout.as_deref()))
         .or_else(|| brand_is_name.then(|| brand.to_owned()))
         .or_else(|| cores.iter().find_map(|c| c.name.clone()))
         .unwrap_or_default()
@@ -504,6 +520,53 @@ const KINDS_RECHECK: Duration = Duration::from_secs(10);
 /// The kind of each core, indexed by CPU number. Empty where cores have no CPU part.
 /// A kind never changes, so it is read once; but while some cores were offline their
 /// kind was only guessed (like the nearest lower core), so that is checked again now and then.
+/// `CPU Clock: 580MHz` in the kernel's boot log (MIPS SoCs such as the MT7628 have no cpufreq).
+fn parse_cpu_clock(log: &str) -> Option<u32> {
+    let rest = log.split("CPU Clock:").nth(1)?;
+    let digits: String = rest
+        .trim_start()
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    digits.parse().ok()
+}
+
+/// How often to look again when the boot log no longer has the line.
+const CLOCK_RECHECK: Duration = Duration::from_secs(600);
+
+/// The CPU clock on MIPS, from the device tree (`clock-frequency`, big-endian Hz) or else the
+/// kernel's boot log (`dmesg`, then OpenWrt's `logread`). The log is a ring buffer: on a
+/// router that has been up for long the line may be gone, so this tries again now and then.
+fn boot_clock_mhz() -> Option<u32> {
+    if !cfg!(any(target_arch = "mips", target_arch = "mips64")) {
+        return None;
+    }
+    static CACHE: Mutex<Option<(Instant, Option<u32>)>> = Mutex::new(None);
+    let mut cache = CACHE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((at, mhz)) = *cache
+        && (mhz.is_some() || at.elapsed() < CLOCK_RECHECK)
+    {
+        return mhz;
+    }
+    let from_tree = fs::read("/proc/device-tree/cpus/cpu@0/clock-frequency")
+        .ok()
+        .and_then(|b| <[u8; 4]>::try_from(b.as_slice()).ok())
+        .map(|b| u32::from_be_bytes(b) / 1_000_000)
+        .filter(|mhz| *mhz > 0);
+    let mhz = from_tree.or_else(|| {
+        let run = |program: &str, args: &[&str]| {
+            crate::cmd::run(std::process::Command::new(program).args(args))
+                .ok()
+                .and_then(|o| parse_cpu_clock(&o.stdout))
+        };
+        run("dmesg", &[]).or_else(|| run("logread", &[]))
+    });
+    *cache = Some((Instant::now(), mhz));
+    mhz
+}
+
 #[cfg(not(windows))]
 pub fn max_mhz_per_core(total: usize) -> Vec<Option<u32>> {
     static CACHE: Mutex<Option<(Instant, usize, bool, Vec<Option<u32>>)>> = Mutex::new(None);
@@ -530,9 +593,15 @@ pub fn max_mhz_per_core(total: usize) -> Vec<Option<u32>> {
         ))
         .is_some()
     });
-    let mhz: Vec<Option<u32>> = (0..total)
+    let mut mhz: Vec<Option<u32>> = (0..total)
         .map(|i| freqs.get(&i).and_then(|khz| u32::try_from(khz / 1000).ok()))
         .collect();
+    // MIPS (OpenWrt) has no cpufreq at all; the kernel logged its (fixed) clock at boot
+    if mhz.iter().all(Option::is_none)
+        && let Some(clock) = boot_clock_mhz().and_then(|c| u32::try_from(c).ok())
+    {
+        mhz = vec![Some(clock); total];
+    }
     *cache = Some((Instant::now(), total, complete, mhz.clone()));
     mhz
 }
@@ -794,5 +863,23 @@ mod tests {
         // 4 cores: "Tegra 3" where /sys/kernel/cluster exists, else plain "Tegra"
         assert!(matches!(tegra_name(&a9(4)).as_str(), "Tegra 3" | "Tegra"));
         assert_eq!(tegra_name(&[]), "Tegra");
+    }
+    #[test]
+    fn mips_core_and_soc() {
+        let text = "system type\t\t: MediaTek MT7628AN ver:1 eco:2\nmachine\t\t\t: TP-Link Archer C50 v3\nprocessor\t\t: 0\ncpu model\t\t: MIPS 24KEc V5.5\nBogoMIPS\t\t: 385.84\n";
+        assert_eq!(
+            mips_description(&parse_cpuinfo(text)).as_deref(),
+            Some("MIPS 24KEc V5.5 (MediaTek MT7628AN)")
+        );
+        // ARM cores have an implementer: not MIPS
+        assert_eq!(mips_description(&parse_cpuinfo(SD855)), None);
+    }
+    #[test]
+    fn mips_boot_clock() {
+        assert_eq!(
+            parse_cpu_clock("[    0.000000] CPU Clock: 580MHz\n"),
+            Some(580)
+        );
+        assert_eq!(parse_cpu_clock("no clock here"), None);
     }
 }
