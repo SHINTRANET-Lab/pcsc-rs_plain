@@ -99,6 +99,7 @@ pub fn start(config: &Config) -> ! {
         hostname,
         dev: config.dev,
         hidden: config.hidden.clone(),
+        os: config.os.clone(),
     });
 
     log!("This OS is supported!");
