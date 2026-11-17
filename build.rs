@@ -49,6 +49,7 @@ fn arch_label(target: &str) -> &'static str {
     match target {
         "aarch64-linux-android" => "ARM64 bionic",
         "armv7-linux-androideabi" => "ARMv7 bionic",
+        "armv7-unknown-linux-musleabihf" => "ARMv7 musl",
         "armv7-unknown-linux-musleabi" => "ARMv7 musl",
         "arm-unknown-linux-musleabi" => "ARMv6 musl",
         "aarch64-unknown-linux-musl" => "ARM64 musl",
@@ -58,6 +59,8 @@ fn arch_label(target: &str) -> &'static str {
         "x86_64-pc-windows-msvc" => "Windows x86_64",
         "i686-pc-windows-msvc" => "Windows i686",
         "x86_64-unknown-linux-gnu" => "x86_64 gnu",
+        "mipsel-unknown-linux-musl" => "MIPSel musl",
+        "mips-unknown-linux-musl" => "MIPS musl",
         _ => "",
     }
 }
